@@ -8,3 +8,7 @@ Static Supabase-backed Electronic Whiteboard. Deploy on Vercel as a static site 
 - Build Command: leave blank
 - Output Directory: leave blank or `.`
 - Root Directory: repository root
+
+## Maintenance
+
+This repository is configured for SSH deploy-key pushes from the local Codex workspace.
