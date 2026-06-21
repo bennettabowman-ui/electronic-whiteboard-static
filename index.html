@@ -638,7 +638,8 @@ window.ICEEngine = {
 let QUOTES = JSON.parse(document.getElementById('data').textContent);
 const STRIP_ORDER = ["N","Q","U","V","X","F","NQ","NV","XH","JV","Q1","Q2","Q3","Q4","N-Z",
                      "CAL27","RED XH","JV27","JV28","Q1 28","Q2 28","CAL28","JV29"];
-let ROOMS = [...new Set(QUOTES.map(q=>q.room))];
+const CUSTOM_ROOM = "Custom";
+let ROOMS = [...new Set(QUOTES.map(q=>q.room))].filter(r=>r!==CUSTOM_ROOM);
 const REGION = JSON.parse(document.getElementById('regions').textContent);
 
 // per-desk default pins (real, region-appropriate points)
@@ -650,6 +651,27 @@ const DESK_DEFAULT = {
               "HSC / TexOk","TETCO M3 / Dominion South","REX / Dominion South","Dominion South / Leidy"]
 };
 function deskDefault(r){ return DESK_DEFAULT[r] || []; }
+function roomTabs(){ return [...ROOMS.filter(r=>r!==CUSTOM_ROOM), CUSTOM_ROOM]; }
+function isCustomRoom(r=room){ return r===CUSTOM_ROOM; }
+function pipeParts(p){ return (p||'').split(' / ').map(x=>x.trim()).filter(Boolean); }
+function pipeRelatedToPins(pipe, pinsArr){
+  const pins=pinsArr||[];
+  if(!pins.length) return false;
+  if(pins.includes(pipe)) return true;
+  const legs=pipeParts(pipe);
+  if(legs.length>1 && legs.some(leg=>pins.includes(leg))) return true;
+  return pins.some(p=>{
+    const pinnedLegs=pipeParts(p);
+    return pinnedLegs.length>1 && pinnedLegs.includes(pipe);
+  });
+}
+function quoteInRoom(q, r=room){
+  if(!isCustomRoom(r)) return q.room===r;
+  return pipeRelatedToPins(q.pipe, pinned?.[CUSTOM_ROOM]||[]);
+}
+function setupQuoteUniverse(r=room){
+  return isCustomRoom(r) ? QUOTES : QUOTES.filter(q=>q.room===r);
+}
 
 let room = ROOMS[0], selKey = null, filter = "", lookupKey = null, lookupTimer = null, lookupResult = null;
 let tradesOpen = loadTradesOpen();
@@ -713,7 +735,7 @@ function profileLayoutFromRooms(layout, field){
 }
 function getCurrentLayout(){
   const rooms={};
-  const names=new Set([...ROOMS, ...Object.keys(pinned||{}), ...Object.keys(stripPref||{})]);
+  const names=new Set([...roomTabs(), ...Object.keys(pinned||{}), ...Object.keys(stripPref||{})]);
   for(const r of names){
     rooms[r]={
       pinned:Array.isArray(pinned?.[r]) ? pinned[r].slice() : deskDefault(r).slice(),
@@ -747,7 +769,7 @@ function applyLayout(layout, opts={}){
   if(!layout || typeof layout!=="object") return false;
   clearLookup(false);
   if(PRODUCTS.includes(layout.product)) product=layout.product;
-  if(layout.room && ROOMS.includes(layout.room)) room=layout.room;
+  if(layout.room && roomTabs().includes(layout.room)) room=layout.room;
   const nextPins={...pinned}, nextStrips={...stripPref};
   const rooms=layout.rooms||{};
   for(const r in rooms){
@@ -767,7 +789,7 @@ function renderProfile(){
 function loadBrokerLayoutFallback(){
   const cached=loadCachedLayout();
   if(cached) applyLayout(cached, {persist:false});
-  else { product="basis"; pinned={}; stripPref={}; room=ROOMS[0]||room; render(); ensureBrokerCache(); }
+  else { product="basis"; pinned={}; stripPref={}; room=ROOMS[0]||CUSTOM_ROOM; render(); ensureBrokerCache(); }
 }
 function switchBroker(){
   const next=askBrokerName(broker);
@@ -810,7 +832,7 @@ function saveStripPref(){ try{ localStorage.setItem('ewb-strips', JSON.stringify
 // strips actually present in the data for the current room+product (+ manual edits)
 function presentStrips(){
   const set=new Set();
-  for(const q of QUOTES) if(q.room===room && (q.product||"basis")===product) set.add(q.strip);
+  for(const q of QUOTES) if(quoteInRoom(q) && (q.product||"basis")===product) set.add(q.strip);
   const ed=edits[room]?.[product]||{}; for(const k in ed) set.add(k.split('\u0001')[1]);
   return STRIP_ORDER.filter(s=>set.has(s)).concat([...set].filter(s=>!STRIP_ORDER.includes(s)));
 }
@@ -1049,7 +1071,7 @@ function focusQuoteKey(key){
 function tradedItems(){
   const out=[];
   for(const q of QUOTES){
-    if(!q.traded || q.room!==room || (q.product||"basis")!==product) continue;
+    if(!q.traded || !quoteInRoom(q) || (q.product||"basis")!==product) continue;
     out.push({key:KEY(q.pipe,q.strip), pipe:q.pipe, strip:q.strip, q, ts:q.ts, manual:false});
   }
   const ed=edits[room]?.[product]||{};
@@ -1091,7 +1113,7 @@ function renderTrades(){
 
 /* ---------- model ---------- */
 function buildModel(){
-  const qs = QUOTES.filter(q=>q.room===room && (q.product||"basis")===product);
+  const qs = QUOTES.filter(q=>quoteInRoom(q) && (q.product||"basis")===product);
   const cell = {};
   for(const q of qs){ (cell[q.pipe]??={}); (cell[q.pipe][q.strip]??=[]).push(q); }
   // overlay manual edits as the freshest direct quote in each cell
@@ -1257,18 +1279,21 @@ function wireGridDrag(){
   });
 }
 function renderTabs(){
-  document.getElementById('tabs').innerHTML=ROOMS.map(r=>
+  document.getElementById('tabs').innerHTML=roomTabs().map(r=>
     `<button class="tab${r===room?' active':''}" data-r="${r}">${r}</button>`).join('');
-  // products present in this room (always offer Basis)
+  // products present in this board (always offer Basis)
   const cnt={};
-  for(const q of QUOTES) if(q.room===room){ const pr=q.product||"basis"; cnt[pr]=(cnt[pr]||0)+1; }
+  const productScope = isCustomRoom(room) && !(pinned?.[CUSTOM_ROOM]||[]).length
+    ? QUOTES
+    : QUOTES.filter(q=>quoteInRoom(q));
+  for(const q of productScope){ const pr=q.product||"basis"; cnt[pr]=(cnt[pr]||0)+1; }
   const avail=PRODUCTS.filter(p=>p==="basis"||cnt[p]);
   if(!avail.includes(product)) product="basis";
   document.getElementById('prodsel').innerHTML=avail.map(p=>
     `<button class="tab${p===product?' active':''}" data-prod="${p}" title="${cnt[p]||0} quotes">${PROD_LABEL[p]}</button>`).join('');
 }
 function renderTape(){
-  const latest=QUOTES.filter(q=>q.room===room && (q.product||"basis")===product).sort((a,b)=>b.ts-a.ts).slice(0,30);
+  const latest=QUOTES.filter(q=>quoteInRoom(q) && (q.product||"basis")===product).sort((a,b)=>b.ts-a.ts).slice(0,30);
   document.getElementById('tape').innerHTML=latest.map(q=>{
     const b=fmt(q.bid),a=fmt(q.offer);
     const px=b&&a?`${b}/${a}`:b?`${b} bid`:`@ ${a}`;
@@ -1332,7 +1357,7 @@ function resetEditor(){
 function openPanel(key){
   selKey=key;
   const [p,s]=key.split('\u0001');
-  const arr=QUOTES.filter(q=>q.room===room&&q.pipe===p&&q.strip===s&&(q.product||"basis")===product).sort((a,b)=>b.ts-a.ts);
+  const arr=QUOTES.filter(q=>quoteInRoom(q)&&q.pipe===p&&q.strip===s&&(q.product||"basis")===product).sort((a,b)=>b.ts-a.ts);
   document.getElementById('ptitle').innerHTML=`${esc(p)} <span class="strip">${esc(s)}</span> · ${PROD_LABEL[product]} · ${arr.length} quoted`;
   let notes='';
   const imp=M.implied[p]?.[s], direct=arr[0];
@@ -1382,10 +1407,10 @@ async function importFiles(fileList){
     }
   }catch(err){ toast('Couldn\u2019t read that file — is it a raw ICE chat export?', true); return; }
   if(parsed===0){ toast('No quotes found. Expecting raw ICE Block chat (lines with {{ }} markup).', true); return; }
-  ROOMS=[...new Set(QUOTES.map(q=>q.room))];
+  ROOMS=[...new Set(QUOTES.map(q=>q.room))].filter(r=>r!==CUSTOM_ROOM);
   MAXTS=Math.max(...QUOTES.map(q=>q.ts));
   // jump to the room that received the most new quotes, if current got none
-  if(!roomsHit[room]){
+  if(!isCustomRoom(room) && !roomsHit[room]){
     const top=Object.entries(roomsHit).sort((a,b)=>b[1]-a[1])[0];
     if(top) room=top[0];
   }
@@ -1409,9 +1434,10 @@ function openModal(){
 function renderSetup(){
   const pins=curPins();
   const strips=curStrips();
+  const universe=setupQuoteUniverse();
   // counts for context
   const cnt={};
-  for(const q of QUOTES) if(q.room===room) cnt[q.pipe]=(cnt[q.pipe]??0)+1;
+  for(const q of universe) cnt[q.pipe]=(cnt[q.pipe]??0)+1;
 
   // --- ROWS (pipes) list ---
   const rowItem=(p,i)=>`<div class="ritem${p.includes(' / ')?' spread':''}" draggable="true" data-list="pipe" data-i="${i}">
@@ -1421,8 +1447,8 @@ function renderSetup(){
       <button class="rm" data-act="rm" data-list="pipe" data-i="${i}" title="Remove">×</button></div>`;
   const pipeList=pins.map(rowItem).join('') || '<div class="ritem" style="color:var(--faint);cursor:default">none — add some below</div>';
 
-  // available pipes to add (in this room, not pinned), grouped by region
-  const avail=[...new Set(QUOTES.filter(q=>q.room===room).map(q=>q.pipe))].filter(p=>!pins.includes(p));
+  // available pipes to add (current desk, or every hub when building Custom)
+  const avail=[...new Set(universe.map(q=>q.pipe))].filter(p=>!pins.includes(p));
   const byReg={}; for(const p of avail){ if(p.includes(' / ')){(byReg["Spreads"]??=[]).push(p);continue;} const r=REGION[p]||"Other"; (byReg[r]??=[]).push(p); }
   let availHtml='';
   for(const r of [...REGION_ORDER,"Spreads"]){ if(!byReg[r])continue;
@@ -1447,7 +1473,7 @@ function renderSetup(){
             <datalist id="pipeOptions">${avail.map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
             <button data-act="add-pipe-input">Add</button></div>
         </div>
-        <div class="grp"><h3>AVAILABLE IN ${room} <span class="cap">click to add</span></h3>
+        <div class="grp"><h3>${isCustomRoom(room)?'AVAILABLE HUBS':'AVAILABLE IN '+room} <span class="cap">click to add</span></h3>
           <div class="avail">${availHtml||'<span style="color:var(--faint);font-size:11px">all pipes added</span>'}</div>
         </div>
       </div>
@@ -1598,7 +1624,9 @@ document.getElementById('fileinput').addEventListener('change',e=>{
 });
 setInterval(()=>{document.getElementById('clock').textContent=
   new Date().toLocaleTimeString('en-US',{hour12:false});},1000);
-renderProfile(); render(); ensureBrokerCache();
+renderProfile();
+if(!applyLayout(loadCachedLayout(), {persist:false})) render();
+ensureBrokerCache();
 </script>
 
 <!-- ============================================================
@@ -1632,7 +1660,7 @@ renderProfile(); render(); ensureBrokerCache();
   });
 
   function refreshDerived(){
-    ROOMS = [...new Set(QUOTES.map(q=>q.room))];
+    ROOMS = [...new Set(QUOTES.map(q=>q.room))].filter(r=>r!==CUSTOM_ROOM);
     MAXTS = Math.max(...QUOTES.map(q=>q.ts));
   }
 
