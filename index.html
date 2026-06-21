@@ -55,7 +55,7 @@ input[type=search]:focus{outline:1px solid var(--accent)}
 .tk{font-size:11px;color:var(--dim)} .tk b{color:var(--text)} .tk .px{color:var(--trade)}
 
 .main{flex:1;display:flex;min-height:0}
-.gridwrap{flex:1;overflow:auto;position:relative}
+.gridwrap{flex:1;overflow:auto;position:relative;min-width:0}
 table{border-collapse:separate;border-spacing:0;min-width:100%}
 th,td{border-bottom:1px solid var(--line-soft);border-right:1px solid var(--line-soft);
       padding:0;white-space:nowrap}
@@ -166,6 +166,28 @@ aside.open{width:350px}
 .legend{padding:8px 16px;border-top:1px solid var(--line);font-size:10px;color:var(--faint);
         display:flex;gap:12px;flex-wrap:wrap}
 .legend i{font-style:normal}
+.tradebox{width:300px;flex:none;border-left:1px solid var(--line);background:var(--panel);
+  display:flex;flex-direction:column;min-height:0;position:relative;transition:width .18s ease}
+.tradebox.closed{width:0;border-left:0;overflow:hidden}
+.tradebox.closed .tradehead,.tradebox.closed .tradelist{display:none}
+.btn.trade-toggle{border-color:rgba(255,179,71,.45);color:var(--trade)}
+.btn.trade-toggle.closed{border-color:var(--line);color:var(--dim)}
+.btn.trade-toggle b{color:var(--fresh);letter-spacing:0;font-weight:700}
+.tradehead{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:8px}
+.tradehead h2{font-size:12px;letter-spacing:.14em;color:var(--trade)}
+.tradehead span{margin-left:auto;font-size:10px;color:var(--dim)}
+.tradelist{flex:1;overflow:auto}
+.tradeitem{width:100%;border:0;border-bottom:1px solid var(--line-soft);background:transparent;
+  color:var(--text);font-family:var(--mono);text-align:left;padding:8px 12px;cursor:pointer}
+.tradeitem:hover,.tradeitem.active{background:rgba(255,179,71,.08)}
+.tradeitem.active{box-shadow:inset 2px 0 0 var(--trade)}
+.tradetop{display:flex;gap:8px;align-items:baseline;font-size:11px;color:var(--dim)}
+.tradetop b{color:var(--fresh);font-size:12px;font-weight:700}
+.tradetop .when{margin-left:auto;color:var(--faint)}
+.tradepx{margin-top:3px;font-size:13px}
+.tradewho{margin-top:3px;font-size:10px;color:var(--accent)}
+.traderaw{margin-top:3px;font-size:10px;color:var(--faint);white-space:normal;word-break:break-word}
+.tradeempty{padding:12px;color:var(--faint);font-size:11px;line-height:1.45}
 footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel);
        font-size:10px;color:var(--faint);display:flex;gap:20px;flex-wrap:wrap}
 
@@ -215,7 +237,12 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
 .avail .rgh{width:100%;font-size:9px;letter-spacing:.12em;color:var(--faint);margin-top:6px}
 .mf{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px}
 .mf .right{margin-left:auto;display:flex;gap:8px}
-@media(max-width:760px){aside.open{position:fixed;right:0;top:0;bottom:0;width:88vw;z-index:9}}
+@media(max-width:1060px){.tradebox{width:250px}}
+@media(max-width:760px){aside.open{position:fixed;right:0;top:0;bottom:0;width:88vw;z-index:9}
+  .tradebox{position:fixed;left:0;right:0;bottom:22px;height:180px;width:auto;z-index:8;border-top:1px solid var(--line)}
+  .tradebox.closed{height:0;width:auto;border-top:0}
+  .gridwrap{padding-bottom:180px}
+  body.trades-closed .gridwrap{padding-bottom:0}}
 </style>
 </head>
 <body>
@@ -225,6 +252,7 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
   <div class="tabs prodsel" id="prodsel"></div>
   <button class="btn" id="importbtn">⬆ IMPORT</button>
   <button class="btn" id="customize">⚙ PIPES</button>
+  <button class="btn trade-toggle" id="tradeToggle" aria-expanded="true">TRADES <b id="tradeTabCount">0</b></button>
   <button class="btn" id="profilebtn">BROKER: <span id="profileName"></span></button>
   <input type="file" id="fileinput" accept=".txt,text/plain" multiple style="display:none">
   <input type="search" id="lookup" placeholder="find quote…" aria-label="Find quote">
@@ -250,6 +278,10 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
       <i><span style="color:var(--trade)">⟡</span> trade impact</i>
     </div>
   </aside>
+  <section class="tradebox" aria-label="Trades">
+    <div class="tradehead"><h2>TRADES</h2><span id="tradeCount"></span></div>
+    <div class="tradelist" id="tradelist"></div>
+  </section>
 </div>
 <footer>
   <span>Quoted white · <span style="color:var(--imp)">implied purple (IMP)</span> · <span style="color:var(--trade)">pulse = trade impact</span> · <b style="color:var(--imp)">Basis / Index / GD</b> are separate markets — switch with the purple selector</span>
@@ -620,6 +652,7 @@ const DESK_DEFAULT = {
 function deskDefault(r){ return DESK_DEFAULT[r] || []; }
 
 let room = ROOMS[0], selKey = null, filter = "", lookupKey = null, lookupTimer = null, lookupResult = null;
+let tradesOpen = loadTradesOpen();
 const PRODUCTS = ["basis","index","gd","phys"];
 const PROD_LABEL = {basis:"Basis", index:"Index", gd:"GD", phys:"Phys"};
 const PROFILE_NAME = "Default";
@@ -654,6 +687,12 @@ function loadBroker(){
 }
 function saveBroker(){
   try{ localStorage.setItem(BROKER_STORAGE_KEY, broker); }catch(e){}
+}
+function loadTradesOpen(){
+  try{ return localStorage.getItem('ewb-trades-open') !== '0'; }catch(e){ return true; }
+}
+function saveTradesOpen(){
+  try{ localStorage.setItem('ewb-trades-open', tradesOpen?'1':'0'); }catch(e){}
 }
 function profileCacheKey(name=broker){
   return `ewb-layout-profile:${brokerKey(name)}:${PROFILE_NAME}`;
@@ -966,6 +1005,12 @@ function lookupLabel(res){
   const px=b&&a?`${b}/${a}`:b?`${b} bid`:a?`@ ${a}`:'--';
   return `${res.strip} ${res.pipe} ${px}${res.implied?' IMP':''}`;
 }
+function priceHtml(q){
+  const b=fmt(q.bid), a=fmt(q.offer);
+  return b&&a?`<span class="b">${b}</span><span class="sl">/</span><span class="a">${a}</span>`
+       : b?`<span class="b">${b}</span><span class="sl"> bid</span>`
+       : a?`<span class="sl">@ </span><span class="a">${a}</span>`:'<span class="sl">--</span>';
+}
 function updateLookupStatus(res, emptyText){
   const el=document.getElementById('lookupStatus');
   if(!el) return;
@@ -976,11 +1021,7 @@ function revealLookupResult(res){
   if(!res) return;
   lookupResult=res; lookupKey=res.key; closeEditor();
   document.getElementById('panel').classList.remove('open');
-  openPanel(res.key);
-  requestAnimationFrame(()=>{
-    const td=document.querySelector(`td[data-k="${encodeURIComponent(res.key)}"]`);
-    if(td) td.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
-  });
+  focusQuoteKey(res.key);
 }
 function runLookup(force){
   const input=document.getElementById('lookup');
@@ -996,6 +1037,56 @@ function runLookup(force){
   }
   updateLookupStatus(res);
   revealLookupResult(res);
+}
+function focusQuoteKey(key){
+  lookupKey=key; closeEditor();
+  openPanel(key);
+  requestAnimationFrame(()=>{
+    const td=document.querySelector(`td[data-k="${encodeURIComponent(key)}"]`);
+    if(td) td.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
+  });
+}
+function tradedItems(){
+  const out=[];
+  for(const q of QUOTES){
+    if(!q.traded || q.room!==room || (q.product||"basis")!==product) continue;
+    out.push({key:KEY(q.pipe,q.strip), pipe:q.pipe, strip:q.strip, q, ts:q.ts, manual:false});
+  }
+  const ed=edits[room]?.[product]||{};
+  for(const k in ed){
+    const e=ed[k];
+    if(!e.traded) continue;
+    const [pipe,strip]=k.split('\u0001');
+    out.push({key:k, pipe, strip, q:{...e, pipe, strip, user:'you (manual)', raw:'manual trade override'}, ts:e.ts, manual:true});
+  }
+  return out.sort((a,b)=>b.ts-a.ts || a.pipe.localeCompare(b.pipe));
+}
+function renderTrades(){
+  const list=document.getElementById('tradelist');
+  const count=document.getElementById('tradeCount');
+  const tabCount=document.getElementById('tradeTabCount');
+  const box=document.querySelector('.tradebox');
+  const toggle=document.getElementById('tradeToggle');
+  if(!list || !count || !box || !toggle) return;
+  const items=tradedItems();
+  box.classList.toggle('closed', !tradesOpen);
+  toggle.classList.toggle('closed', !tradesOpen);
+  document.body.classList.toggle('trades-closed', !tradesOpen);
+  toggle.setAttribute('aria-expanded', tradesOpen?'true':'false');
+  toggle.title=tradesOpen?'Close trades':'Open trades';
+  count.textContent=`${items.length} ${items.length===1?'trade':'trades'}`;
+  if(tabCount) tabCount.textContent=items.length;
+  if(!items.length){
+    list.innerHTML=`<div class="tradeempty">No trades in ${esc(room)} ${esc(PROD_LABEL[product])}.</div>`;
+    return;
+  }
+  list.innerHTML=items.map(it=>`<button class="tradeitem${it.key===selKey||it.key===lookupKey?' active':''}"
+      data-tradekey="${encodeURIComponent(it.key)}">
+      <div class="tradetop"><b>${esc(it.strip)} ${esc(it.pipe)}</b><span class="when">${it.manual?'manual':ageLabel(it.ts)}</span></div>
+      <div class="tradepx">${priceHtml(it.q)}</div>
+      <div class="tradewho">${esc(it.q.user||'')}</div>
+      <div class="traderaw">${esc(it.q.raw||'')}</div>
+    </button>`).join('');
 }
 
 /* ---------- model ---------- */
@@ -1130,7 +1221,7 @@ function render(){
   document.getElementById('nQuotes').textContent=M.count;
   const lo=Math.min(...QUOTES.map(q=>q.ts));
   document.getElementById('range').textContent=q2date(lo)+' – '+q2date(MAXTS);
-  renderTabs(); renderTape(); wireGridDrag();
+  renderTabs(); renderTape(); renderTrades(); wireGridDrag();
 }
 
 let gDragType=null, gDragName=null;
@@ -1421,6 +1512,11 @@ document.addEventListener('dblclick',e=>{
 });
 document.addEventListener('click',e=>{
   if(e.target.closest('#profilebtn')){ switchBroker(); return; }
+  if(e.target.closest('#tradeToggle')){
+    tradesOpen=!tradesOpen; saveTradesOpen(); renderTrades(); return;
+  }
+  const trade=e.target.closest('[data-tradekey]');
+  if(trade){ focusQuoteKey(decodeURIComponent(trade.dataset.tradekey)); return; }
   // inline header delete (×) on grid rows/columns
   const delP=e.target.closest('[data-delpipe]');
   if(delP){ const a=curPins(); const i=a.indexOf(delP.dataset.delpipe);
