@@ -37,6 +37,12 @@ header{display:flex;align-items:center;gap:14px;padding:10px 16px;
 input[type=search]{background:var(--ink);border:1px solid var(--line);border-radius:4px;
   color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;width:150px}
 input[type=search]:focus{outline:1px solid var(--accent)}
+#lookup{width:210px;border-color:#2e446d}
+.lookup-status{font-size:11px;color:var(--dim);max-width:260px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;cursor:pointer}
+.lookup-status b{color:var(--fresh);font-weight:600}
+.lookup-status.good{color:var(--trade)}
+.lookup-status.empty{color:var(--ask);cursor:default}
 
 .tape{position:relative;overflow:hidden;border-bottom:1px solid var(--line);
       background:#0d1626;height:28px;flex:none}
@@ -219,7 +225,10 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
   <div class="tabs prodsel" id="prodsel"></div>
   <button class="btn" id="importbtn">⬆ IMPORT</button>
   <button class="btn" id="customize">⚙ PIPES</button>
+  <button class="btn" id="profilebtn">BROKER: <span id="profileName"></span></button>
   <input type="file" id="fileinput" accept=".txt,text/plain" multiple style="display:none">
+  <input type="search" id="lookup" placeholder="find quote…" aria-label="Find quote">
+  <span class="lookup-status" id="lookupStatus"></span>
   <input type="search" id="filter" placeholder="filter…" aria-label="Filter pipes">
   <div class="meta">
     <span><b id="nQuotes">0</b> quotes</span>
@@ -588,6 +597,7 @@ function cleanPipes(quotes){
 
 window.ICEEngine = {
   process(text){ return cleanPipes(correct(parseChat(text))); },
+  canonPipe: canon,
   REGION
 };
 })();
@@ -609,25 +619,141 @@ const DESK_DEFAULT = {
 };
 function deskDefault(r){ return DESK_DEFAULT[r] || []; }
 
-let room = ROOMS[0], selKey = null, filter = "";
+let room = ROOMS[0], selKey = null, filter = "", lookupKey = null, lookupTimer = null, lookupResult = null;
 const PRODUCTS = ["basis","index","gd","phys"];
 const PROD_LABEL = {basis:"Basis", index:"Index", gd:"GD", phys:"Phys"};
+const PROFILE_NAME = "Default";
+const BROKER_STORAGE_KEY = "ewb-who";
+let broker = loadBroker();
 let product = loadProduct();
 let pinned = loadPins();   // room -> [pipe names]  (order = display order)
 let stripPref = loadStripPref(); // room -> [strip codes] (order = column order)
 let edits = loadEdits();   // room -> product -> KEY -> {bid,offer,traded,ts}
 
+function cleanBrokerName(name){
+  return (name||"").trim() || "desk";
+}
+function brokerKey(name=broker){
+  return cleanBrokerName(name).toLowerCase().replace(/\s+/g,"-");
+}
+function askBrokerName(current){
+  try{
+    if(typeof prompt!=="function") return null;
+    return prompt('Broker name or initials:', current);
+  }catch(e){
+    console.warn('[EWB] broker prompt unavailable:', e.message);
+    return null;
+  }
+}
+function loadBroker(){
+  try{ const v=localStorage.getItem(BROKER_STORAGE_KEY); if(v) return cleanBrokerName(v); }catch(e){}
+  const v=askBrokerName('');
+  const name=cleanBrokerName(v);
+  try{ localStorage.setItem(BROKER_STORAGE_KEY,name); }catch(e){}
+  return name;
+}
+function saveBroker(){
+  try{ localStorage.setItem(BROKER_STORAGE_KEY, broker); }catch(e){}
+}
+function profileCacheKey(name=broker){
+  return `ewb-layout-profile:${brokerKey(name)}:${PROFILE_NAME}`;
+}
+function loadCachedLayout(name=broker){
+  try{
+    const v=localStorage.getItem(profileCacheKey(name));
+    return v?JSON.parse(v):null;
+  }catch(e){ return null; }
+}
+function profileLayoutFromRooms(layout, field){
+  const out={};
+  const rooms=layout?.rooms||{};
+  for(const r in rooms){
+    if(Array.isArray(rooms[r]?.[field])) out[r]=rooms[r][field].filter(Boolean);
+  }
+  return out;
+}
+function getCurrentLayout(){
+  const rooms={};
+  const names=new Set([...ROOMS, ...Object.keys(pinned||{}), ...Object.keys(stripPref||{})]);
+  for(const r of names){
+    rooms[r]={
+      pinned:Array.isArray(pinned?.[r]) ? pinned[r].slice() : deskDefault(r).slice(),
+      strips:Array.isArray(stripPref?.[r]) ? stripPref[r].slice() : []
+    };
+  }
+  return {version:1, profile:PROFILE_NAME, broker_id:brokerKey(), broker_name:broker,
+    room, product, rooms, updated_at:new Date().toISOString()};
+}
+function saveLayoutCache(layout=getCurrentLayout()){
+  try{ localStorage.setItem(profileCacheKey(layout.broker_name||broker), JSON.stringify(layout)); }catch(e){}
+}
+function ensureBrokerCache(){
+  if(loadCachedLayout()) return;
+  const layout=getCurrentLayout();
+  layout.updated_at="1970-01-01T00:00:00.000Z";
+  saveLayoutCache(layout);
+}
+function noteLayoutChanged(){
+  const layout=getCurrentLayout();
+  saveLayoutCache(layout);
+  if(window.EWBProfiles?.queueSave) window.EWBProfiles.queueSave(layout);
+}
+function persistLayoutLocal(){
+  try{ localStorage.setItem('ewb-product', product); }catch(e){}
+  try{ localStorage.setItem('ewb-pins2', JSON.stringify(pinned)); }catch(e){}
+  try{ localStorage.setItem('ewb-strips', JSON.stringify(stripPref)); }catch(e){}
+  saveLayoutCache();
+}
+function applyLayout(layout, opts={}){
+  if(!layout || typeof layout!=="object") return false;
+  clearLookup(false);
+  if(PRODUCTS.includes(layout.product)) product=layout.product;
+  if(layout.room && ROOMS.includes(layout.room)) room=layout.room;
+  const nextPins={...pinned}, nextStrips={...stripPref};
+  const rooms=layout.rooms||{};
+  for(const r in rooms){
+    if(Array.isArray(rooms[r]?.pinned)) nextPins[r]=rooms[r].pinned.filter(Boolean);
+    if(Array.isArray(rooms[r]?.strips)) nextStrips[r]=rooms[r].strips.filter(Boolean);
+  }
+  pinned=nextPins; stripPref=nextStrips;
+  if(opts.persist!==false) persistLayoutLocal();
+  renderProfile();
+  render();
+  return true;
+}
+function renderProfile(){
+  const el=document.getElementById('profileName');
+  if(el) el.textContent=broker;
+}
+function loadBrokerLayoutFallback(){
+  const cached=loadCachedLayout();
+  if(cached) applyLayout(cached, {persist:false});
+  else { product="basis"; pinned={}; stripPref={}; room=ROOMS[0]||room; render(); ensureBrokerCache(); }
+}
+function switchBroker(){
+  const next=askBrokerName(broker);
+  if(next===null) return;
+  clearLookup(true);
+  broker=cleanBrokerName(next); saveBroker(); renderProfile();
+  loadBrokerLayoutFallback();
+  if(window.EWBProfiles?.load) window.EWBProfiles.load();
+}
 function loadProduct(){
+  const cached=loadCachedLayout();
+  if(cached?.product && PRODUCTS.includes(cached.product)) return cached.product;
   try{ const v=localStorage.getItem('ewb-product'); if(v) return v; }catch(e){}
   return "basis";
 }
-function saveProduct(){ try{ localStorage.setItem('ewb-product', product); }catch(e){} }
+function saveProduct(){ try{ localStorage.setItem('ewb-product', product); }catch(e){} noteLayoutChanged(); }
 
 function loadPins(){
+  const cached=loadCachedLayout();
+  const fromCache=profileLayoutFromRooms(cached, 'pinned');
+  if(Object.keys(fromCache).length) return fromCache;
   try{ const v = localStorage.getItem('ewb-pins2'); if(v) return JSON.parse(v); }catch(e){}
   return {};
 }
-function savePins(){ try{ localStorage.setItem('ewb-pins2', JSON.stringify(pinned)); }catch(e){} }
+function savePins(){ try{ localStorage.setItem('ewb-pins2', JSON.stringify(pinned)); }catch(e){} noteLayoutChanged(); }
 function curPins(){
   if(!pinned[room]) pinned[room] = [...deskDefault(room)];
   return pinned[room];
@@ -635,10 +761,13 @@ function curPins(){
 function setPins(arr){ pinned[room] = arr; savePins(); }
 
 function loadStripPref(){
+  const cached=loadCachedLayout();
+  const fromCache=profileLayoutFromRooms(cached, 'strips');
+  if(Object.keys(fromCache).length) return fromCache;
   try{ const v=localStorage.getItem('ewb-strips'); if(v) return JSON.parse(v); }catch(e){}
   return {};
 }
-function saveStripPref(){ try{ localStorage.setItem('ewb-strips', JSON.stringify(stripPref)); }catch(e){} }
+function saveStripPref(){ try{ localStorage.setItem('ewb-strips', JSON.stringify(stripPref)); }catch(e){} noteLayoutChanged(); }
 // strips actually present in the data for the current room+product (+ manual edits)
 function presentStrips(){
   const set=new Set();
@@ -700,6 +829,174 @@ function ageLabel(t){
   const d=Math.floor((MAXTS-t)/DAY);const dt=new Date(t);
   return d<1?(dt.getMonth()+1)+'/'+dt.getDate():d+'d';}
 function q2date(t){const dt=new Date(t);return (dt.getMonth()+1)+'/'+dt.getDate();}
+
+/* ---------- quick quote lookup ---------- */
+const normLookup = s => (s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+function lookupTokens(s){ return normLookup(s).split(/\s+/).filter(Boolean); }
+function stripAliases(s){
+  const compact=s.toLowerCase().replace(/\s+/g,'');
+  const out=[s.toLowerCase(), compact];
+  if(/^CAL\d+$/i.test(s)) out.push('c'+s.slice(3), 'cal '+s.slice(3));
+  if(/^JV\d+$/i.test(s)) out.push('jv '+s.slice(2));
+  if(s==="JV28") out.push('jv8','jv 8');
+  if(s==="RED XH") out.push('redxh','red xh');
+  if(s==="N-Z") out.push('nz','n z');
+  return [...new Set(out.map(normLookup).filter(Boolean))];
+}
+function pipeAliases(p){
+  const base=normLookup(p), compact=base.replace(/\s+/g,'');
+  const terms=base.split(/\s+/);
+  const out=[base, compact];
+  const add=(...xs)=>out.push(...xs.map(normLookup));
+  const has=x=>base.includes(normLookup(x));
+  const hasTerm=x=>terms.includes(normLookup(x));
+  if(has('Chicago')) add('chi','chic');
+  if(has('Dominion South')) add('dom','dom south','dominion');
+  if(has('HSC')) add('ship','shp','houston ship');
+  if(has('TexOk')) add('txok','tex ok','tx ok');
+  if(has('MichCon')) add('mich');
+  if(has('PEPL')) add('pan','panhandle');
+  if(has('REX')) add('rox');
+  if(has('TETCO M2')) add('m2','tetco m2');
+  if(has('TETCO M3')) add('m3','tetco m3');
+  if(has('Transco Z6 non-NY')) add('nonny','nny','z6');
+  if(has('Transco Sta 85')) add('st85','sta85','station 85');
+  if(has('Transco Sta 65')) add('st65','sta65','station 65');
+  if(hasTerm('TCO')) add('columbia');
+  if(p.includes(' / ')){
+    const legs=p.split(' / ');
+    add(legs.join(' vs '), legs.join(' '));
+    legs.forEach(leg=>pipeAliases(leg).forEach(a=>out.push(a)));
+  }
+  return [...new Set(out.filter(Boolean))];
+}
+function aliasScore(query, tokens, aliases, weight){
+  let best=0;
+  for(const a of aliases){
+    const parts=a.split(/\s+/).filter(Boolean);
+    if(!parts.length) continue;
+    if(query===a) best=Math.max(best, weight+30);
+    else if(query.includes(a) && a.length>2) best=Math.max(best, weight+10);
+    else if(parts.every(part=>tokens.includes(part))) best=Math.max(best, weight);
+  }
+  return best;
+}
+function clearLookup(closePanel){
+  clearTimeout(lookupTimer);
+  lookupKey=null; lookupResult=null;
+  const input=document.getElementById('lookup');
+  if(input) input.value='';
+  updateLookupStatus(null,'');
+  if(closePanel) document.getElementById('panel')?.classList.remove('open');
+}
+function removeAliasParts(tokens, parts){
+  const next=tokens.slice();
+  for(const part of parts){
+    const i=next.indexOf(part);
+    if(i<0) return null;
+    next.splice(i,1);
+  }
+  return next;
+}
+function parseLookupIntent(q){
+  const tokens=lookupTokens(q);
+  if(!tokens.length) return null;
+  const entries=[];
+  const activeStrips=new Set();
+  for(const c of lookupCandidates()) activeStrips.add(c.strip);
+  for(const s of activeStrips){
+    for(const alias of stripAliases(s)){
+      entries.push({strip:s, alias, parts:alias.split(/\s+/).filter(Boolean)});
+    }
+  }
+  entries.sort((a,b)=>b.parts.length-a.parts.length || b.alias.length-a.alias.length);
+  for(const e of entries){
+    const rest=removeAliasParts(tokens, e.parts);
+    if(!rest || !rest.length) continue;
+    const pipe=window.ICEEngine?.canonPipe?.(rest.join(' '));
+    if(pipe) return {strip:e.strip, pipe};
+  }
+  return null;
+}
+function lookupCandidates(){
+  const rows=new Set([...Object.keys(M?.cell||{}), ...Object.keys(M?.implied||{})]);
+  const out=[];
+  rows.forEach(p=>{
+    const strips=new Set([...Object.keys(M.cell[p]||{}), ...Object.keys(M.implied[p]||{})]);
+    strips.forEach(s=>{
+      const direct=M.cell[p]?.[s]?.[0], imp=M.implied[p]?.[s];
+      const useImp=imp && (!direct || imp.ts>direct.ts);
+      const q=useImp?imp:direct;
+      if(q) out.push({pipe:p, strip:s, quote:q, implied:useImp, key:KEY(p,s)});
+    });
+  });
+  return out;
+}
+function findLookup(q){
+  const query=normLookup(q), tokens=lookupTokens(q);
+  if(!query) return null;
+  const intent=parseLookupIntent(q);
+  if(intent){
+    const exact=lookupCandidates()
+      .filter(c=>c.strip===intent.strip && c.pipe===intent.pipe)
+      .sort((a,b)=>(b.quote.ts||0)-(a.quote.ts||0))[0];
+    if(exact) return {...exact, score:1000};
+  }
+  let best=null;
+  for(const c of lookupCandidates()){
+    const ss=aliasScore(query, tokens, stripAliases(c.strip), 90);
+    const ps=aliasScore(query, tokens, pipeAliases(c.pipe), 90);
+    const combo=normLookup(`${c.strip} ${c.pipe}`);
+    let score=ss+ps;
+    if(query===combo) score+=100;
+    if(combo.includes(query) && query.length>2) score+=20;
+    for(const t of tokens){
+      if(t.length>1 && combo.includes(t)) score+=4;
+    }
+    if(!score) continue;
+    if(c.pipe.includes(' / ') && !/(?:^|\s)(vs|spread)(?:\s|$)/.test(query) && !q.includes('/')) score-=12;
+    score+=(c.quote.ts||0)/(MAXTS||1)*8;
+    if(!c.implied) score+=3;
+    if(!best || score>best.score) best={...c, score};
+  }
+  return best && best.score>=35 ? best : null;
+}
+function lookupLabel(res){
+  const b=fmt(res.quote.bid), a=fmt(res.quote.offer);
+  const px=b&&a?`${b}/${a}`:b?`${b} bid`:a?`@ ${a}`:'--';
+  return `${res.strip} ${res.pipe} ${px}${res.implied?' IMP':''}`;
+}
+function updateLookupStatus(res, emptyText){
+  const el=document.getElementById('lookupStatus');
+  if(!el) return;
+  el.className='lookup-status'+(res?' good':emptyText?' empty':'');
+  el.textContent=res ? lookupLabel(res) : (emptyText||'');
+}
+function revealLookupResult(res){
+  if(!res) return;
+  lookupResult=res; lookupKey=res.key; closeEditor();
+  document.getElementById('panel').classList.remove('open');
+  openPanel(res.key);
+  requestAnimationFrame(()=>{
+    const td=document.querySelector(`td[data-k="${encodeURIComponent(res.key)}"]`);
+    if(td) td.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
+  });
+}
+function runLookup(force){
+  const input=document.getElementById('lookup');
+  const q=input?.value||'';
+  if(!q.trim()){
+    clearLookup(true); render(); return;
+  }
+  if(!force && normLookup(q).length<2) return;
+  const res=findLookup(q);
+  if(!res){
+    lookupKey=null; lookupResult=null; updateLookupStatus(null,'No quote found');
+    document.getElementById('panel').classList.remove('open'); render(); return;
+  }
+  updateLookupStatus(res);
+  revealLookupResult(res);
+}
 
 /* ---------- model ---------- */
 function buildModel(){
@@ -792,16 +1089,21 @@ function render(){
   M = buildModel();
   const pins = curPins();
   // rows follow the pinned order exactly (incl. pinned-but-no-data pipes)
-  const visible = pins.filter(p=>p.toLowerCase().includes(filter));
+  const visiblePins = pins.slice();
+  const lookupPipe = lookupKey?.split('\u0001')[0];
+  if(lookupPipe && !visiblePins.includes(lookupPipe)) visiblePins.push(lookupPipe);
+  const visible = visiblePins.filter(p=>p.toLowerCase().includes(filter) || p===lookupPipe);
   const strips = curStrips();
+  const lookupStrip = lookupKey?.split('\u0001')[1];
+  if(lookupStrip && !strips.includes(lookupStrip)) strips.push(lookupStrip);
 
   const thead=document.querySelector('#grid thead');
   const tbody=document.querySelector('#grid tbody');
-  thead.innerHTML='<tr><th>PIPE / HUB</th>'+strips.map(s=>`<th class="draghdr" draggable="true" data-strip="${esc(s)}">${s}<button class="hdrx" data-delstrip="${esc(s)}" title="Remove column">×</button></th>`).join('')+'</tr>';
+  thead.innerHTML='<tr><th>PIPE / HUB</th>'+strips.map(s=>`<th class="draghdr" draggable="true" data-strip="${esc(s)}">${esc(s)}<button class="hdrx" data-delstrip="${esc(s)}" title="Remove column">×</button></th>`).join('')+'</tr>';
   tbody.innerHTML=visible.map(p=>{
     const n=Object.values(M.cell[p]??{}).flat().length;
     const cls=p.includes(' / ')?' class="spread"':'';
-    return `<tr${cls}><th class="draghdr" draggable="true" data-pipe="${esc(p)}">${p}<small>${n?n+' quotes':'no quotes — pinned'}</small><button class="hdrx" data-delpipe="${esc(p)}" title="Remove row">×</button></th>`+
+    return `<tr${cls}><th class="draghdr" draggable="true" data-pipe="${esc(p)}">${esc(p)}<small>${n?n+' quotes':'no quotes — pinned'}</small><button class="hdrx" data-delpipe="${esc(p)}" title="Remove row">×</button></th>`+
       strips.map(s=>{
         const direct=M.cell[p]?.[s]?.[0];
         const imp=M.implied[p]?.[s];
@@ -816,7 +1118,7 @@ function render(){
         const k=KEY(p,s);
         const hit=M.impacts[k]?' hit':'';
         const isManual = !useImp && direct?.manual;
-        return `<td class="${ageClass(q.ts)}${useImp?' implied':''}${isManual?' manual':''}${hit}${k===selKey?' sel':''}"
+        return `<td class="${ageClass(q.ts)}${useImp?' implied':''}${isManual?' manual':''}${hit}${k===selKey||k===lookupKey?' sel':''}"
           data-k="${encodeURIComponent(k)}">
           ${useImp?'<span class="impbadge">IMP</span>':''}
           ${isManual?'<span class="manbadge">✎</span>':''}
@@ -879,7 +1181,7 @@ function renderTape(){
   document.getElementById('tape').innerHTML=latest.map(q=>{
     const b=fmt(q.bid),a=fmt(q.offer);
     const px=b&&a?`${b}/${a}`:b?`${b} bid`:`@ ${a}`;
-    return `<span class="tk"><b>${q.strip} ${q.pipe}</b> <span class="px">${px}</span> · ${q.user.replace('-fex','')}</span>`;
+    return `<span class="tk"><b>${esc(q.strip)} ${esc(q.pipe)}</b> <span class="px">${px}</span> · ${esc(q.user.replace('-fex',''))}</span>`;
   }).join('');
 }
 
@@ -940,24 +1242,24 @@ function openPanel(key){
   selKey=key;
   const [p,s]=key.split('\u0001');
   const arr=QUOTES.filter(q=>q.room===room&&q.pipe===p&&q.strip===s&&(q.product||"basis")===product).sort((a,b)=>b.ts-a.ts);
-  document.getElementById('ptitle').innerHTML=`${p} <span class="strip">${s}</span> · ${PROD_LABEL[product]} · ${arr.length} quoted`;
+  document.getElementById('ptitle').innerHTML=`${esc(p)} <span class="strip">${esc(s)}</span> · ${PROD_LABEL[product]} · ${arr.length} quoted`;
   let notes='';
   const imp=M.implied[p]?.[s], direct=arr[0];
   if(imp && (!direct||imp.ts>direct.ts)){
-    notes+=`<div class="note imp">IMPLIED ${fmt(imp.bid)??'—'} / ${fmt(imp.offer)??'—'}<br>derived: ${imp.via}<br>as of ${q2date(imp.ts)} (oldest leg)</div>`;
+    notes+=`<div class="note imp">IMPLIED ${fmt(imp.bid)??'—'} / ${fmt(imp.offer)??'—'}<br>derived: ${esc(imp.via)}<br>as of ${q2date(imp.ts)} (oldest leg)</div>`;
   } else if(imp){
-    notes+=`<div class="note imp">implied also available: ${fmt(imp.bid)??'—'} / ${fmt(imp.offer)??'—'} via ${imp.via} (staler than quote)</div>`;
+    notes+=`<div class="note imp">implied also available: ${fmt(imp.bid)??'—'} / ${fmt(imp.offer)??'—'} via ${esc(imp.via)} (staler than quote)</div>`;
   }
   for(const t of (M.impacts[key]??[]))
-    notes+=`<div class="note hit">⟡ ${t}</div>`;
+    notes+=`<div class="note hit">⟡ ${esc(t)}</div>`;
   document.getElementById('pnotes').innerHTML=notes;
   document.getElementById('phist').innerHTML=arr.map(q=>{
     const b=fmt(q.bid),a=fmt(q.offer);
     const px=b&&a?`<span class="b">${b}</span> / <span class="a">${a}</span>`
             :b?`<span class="b">${b}</span> bid`:`@ <span class="a">${a}</span>`;
     return `<div class="hq${q.traded?' traded':''}">
-      <div class="top"><span class="t">${q.date} ${q.time}</span><span class="who">${q.user}</span></div>
-      <div class="px">${px}</div><div class="raw">${q.raw.replace(/</g,'&lt;')}</div></div>`;
+      <div class="top"><span class="t">${esc(q.date)} ${esc(q.time)}</span><span class="who">${esc(q.user)}</span></div>
+      <div class="px">${px}</div><div class="raw">${esc(q.raw)}</div></div>`;
   }).join('')||'<div class="hq"><div class="raw">No direct quotes — price on the board is implied only.</div></div>';
   document.getElementById('panel').classList.add('open');
   render();
@@ -1118,6 +1420,7 @@ document.addEventListener('dblclick',e=>{
   if(td){ openEditor(decodeURIComponent(td.dataset.k), td); }
 });
 document.addEventListener('click',e=>{
+  if(e.target.closest('#profilebtn')){ switchBroker(); return; }
   // inline header delete (×) on grid rows/columns
   const delP=e.target.closest('[data-delpipe]');
   if(delP){ const a=curPins(); const i=a.indexOf(delP.dataset.delpipe);
@@ -1130,8 +1433,10 @@ document.addEventListener('click',e=>{
           openEditor(decodeURIComponent(td.dataset.k), td); return; }
   const tab=e.target.closest('.tab');
   if(tab && tab.dataset.prod){ product=tab.dataset.prod; saveProduct(); selKey=null; closeEditor();
+    lookupKey=null; lookupResult=null; updateLookupStatus(null,'');
     document.getElementById('panel').classList.remove('open'); render(); return; }
   if(tab && tab.dataset.r){ room=tab.dataset.r; selKey=null; closeEditor();
+    lookupKey=null; lookupResult=null; updateLookupStatus(null,'');
     document.getElementById('panel').classList.remove('open'); render(); return; }
   switch(e.target.id){
     case 'pclose': selKey=null;
@@ -1178,17 +1483,31 @@ document.getElementById('mbody').addEventListener('keydown',e=>{
 document.getElementById('filter').addEventListener('input',e=>{
   filter=e.target.value.toLowerCase(); render();
 });
+document.getElementById('lookup').addEventListener('input',()=>{
+  clearTimeout(lookupTimer);
+  lookupTimer=setTimeout(()=>runLookup(false), 180);
+});
+document.getElementById('lookup').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){ e.preventDefault(); runLookup(true); }
+  else if(e.key==='Escape'){
+    e.preventDefault(); e.target.value=''; lookupKey=null; lookupResult=null;
+    updateLookupStatus(null,''); document.getElementById('panel').classList.remove('open'); render();
+  }
+});
+document.getElementById('lookupStatus').addEventListener('click',()=>{
+  if(lookupResult) revealLookupResult(lookupResult);
+});
 document.getElementById('fileinput').addEventListener('change',e=>{
   importFiles(e.target.files); e.target.value='';
 });
 setInterval(()=>{document.getElementById('clock').textContent=
   new Date().toLocaleTimeString('en-US',{hour12:false});},1000);
-render();
+renderProfile(); render(); ensureBrokerCache();
 </script>
 
 <!-- ============================================================
      Supabase live sync — shared quotes + edits across the desk
-     Layout (pinned rows, strip order, product tab) stays local.
+     Broker layout profiles sync through layout_profiles.
      ============================================================ -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
@@ -1203,11 +1522,6 @@ render();
   }
   const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY,
     { realtime:{ params:{ eventsPerSecond: 20 } } });
-
-  /* ---- who am I (for edit attribution) ---- */
-  let WHO = localStorage.getItem('ewb-who');
-  if(!WHO){ WHO = (prompt('Your name or initials for the desk board:','')||'').trim() || 'desk';
-            localStorage.setItem('ewb-who', WHO); }
 
   /* ---- row <-> local quote mapping ---- */
   const rowToQuote = r => ({
@@ -1240,6 +1554,66 @@ render();
     else edits[r.room][r.product][k] = {bid:r.bid, offer:r.offer, traded:!!r.traded, ts:Number(r.ts)};
     saveEdits();
   }
+  function handleLayoutError(action, error){
+    if(!error) return false;
+    console.warn(`[EWB] layout profile ${action}:`, error.message);
+    return true;
+  }
+  let applyingLayout=false, layoutTimer=null, layoutSyncEnabled=true;
+  async function loadLayoutProfile(){
+    if(!layoutSyncEnabled) return;
+    try{
+      const {data,error} = await sb.from('layout_profiles')
+        .select('layout,updated_at')
+        .eq('broker_id', brokerKey())
+        .eq('name', PROFILE_NAME)
+        .maybeSingle();
+      if(error){ layoutSyncEnabled=false; handleLayoutError('load', error); return; }
+      if(data?.layout){
+        const local=loadCachedLayout();
+        const localAt=Date.parse(local?.updated_at||0);
+        const remoteAt=Date.parse(data.updated_at||data.layout.updated_at||0);
+        if(localAt && remoteAt && localAt > remoteAt + 1000){
+          applyLayout(local, {persist:false});
+          queueLayoutSave(local);
+          return;
+        }
+        applyingLayout=true;
+        applyLayout(data.layout);
+        applyingLayout=false;
+      } else {
+        queueLayoutSave(getCurrentLayout());
+      }
+    }catch(err){
+      layoutSyncEnabled=false;
+      console.warn('[EWB] layout profile load:', err);
+    } finally {
+      applyingLayout=false;
+    }
+  }
+  async function pushLayoutProfile(layout=getCurrentLayout()){
+    if(!layoutSyncEnabled || applyingLayout) return;
+    try{
+      const {error} = await sb.from('layout_profiles').upsert({
+        broker_id:layout.broker_id||brokerKey(layout.broker_name),
+        name:PROFILE_NAME,
+        is_default:true,
+        layout,
+        updated_at:layout.updated_at||new Date().toISOString()
+      }, {onConflict:'broker_id,name'});
+      if(error){ layoutSyncEnabled=false; handleLayoutError('save', error); }
+    }catch(err){
+      layoutSyncEnabled=false;
+      console.warn('[EWB] layout profile save:', err);
+    }
+  }
+  function queueLayoutSave(layout=getCurrentLayout()){
+    if(!layoutSyncEnabled || applyingLayout) return;
+    const snapshot=JSON.parse(JSON.stringify(layout));
+    clearTimeout(layoutTimer);
+    layoutTimer=setTimeout(()=>pushLayoutProfile(snapshot), 350);
+  }
+  window.EWBProfiles = {load:loadLayoutProfile, queueSave:queueLayoutSave, pushNow:pushLayoutProfile};
 
   /* ---- initial load ---- */
   async function initialLoad(){
@@ -1254,6 +1628,7 @@ render();
       (qs||[]).forEach(r=>{ if(applyRemoteQuote(r)) changed=true; });
       (es||[]).forEach(r=>applyRemoteEdit(r,false));
       if(changed) refreshDerived();
+      await loadLayoutProfile();
       render();
     }catch(err){ console.warn('[EWB] initial load failed:', err); }
   }
@@ -1285,7 +1660,7 @@ render();
       if(error) console.warn('[EWB] edit delete:', error.message);
     } else {
       const {error} = await sb.from('edits').upsert(
-        {room,product,pipe:p,strip:s,bid:obj.bid,offer:obj.offer,traded:!!obj.traded,ts:obj.ts,editor:WHO},
+        {room,product,pipe:p,strip:s,bid:obj.bid,offer:obj.offer,traded:!!obj.traded,ts:obj.ts,editor:broker},
         {onConflict:'room,product,pipe,strip'});
       if(error) console.warn('[EWB] edit push:', error.message);
     }
