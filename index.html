@@ -113,9 +113,10 @@ thead th.draghdr:active,tbody th.draghdr:active{cursor:grabbing}
 thead th.draghdr.dragging,tbody th.draghdr.dragging{opacity:.4}
 tbody th.draghdr.over{box-shadow:inset 0 3px 0 var(--accent)}
 thead th.draghdr.over{box-shadow:inset 3px 0 0 var(--accent)}
-.hdrx{position:absolute;top:3px;right:5px;border:none;background:none;cursor:pointer;
-  color:var(--faint);font-family:var(--mono);font-size:13px;line-height:1;padding:1px 3px;
-  opacity:0;transition:opacity .12s;border-radius:3px}
+.hdrx{position:absolute;top:1px;right:2px;width:22px;height:22px;border:none;background:none;
+  cursor:pointer;z-index:5;color:var(--faint);font-family:var(--mono);font-size:14px;line-height:1;
+  display:flex;align-items:center;justify-content:center;padding:0;
+  opacity:0;transition:opacity .12s;border-radius:3px;touch-action:manipulation}
 th:hover .hdrx{opacity:.55}
 .hdrx:hover{opacity:1;color:var(--ask);background:rgba(255,125,107,.12)}
 
@@ -254,7 +255,7 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
 .ritem .ord button,.ritem .rm{background:none;border:none;color:var(--faint);cursor:pointer;
   font-family:var(--mono);padding:0 2px;font-size:11px}
 .ritem .ord button:hover,.ritem .rm:hover{color:var(--accent)}
-.ritem .rm{font-size:14px;color:var(--faint)}
+.ritem .rm{font-size:14px;color:var(--faint);touch-action:manipulation}
 .ritem .rm:hover{color:var(--ask)}
 .addrow{display:flex;gap:6px;margin-top:8px}
 .addrow input{flex:1;background:var(--ink);border:1px solid var(--line);border-radius:4px;
@@ -878,8 +879,11 @@ function loadPins(){
   return {};
 }
 function savePins(){ try{ localStorage.setItem('ewb-pins2', JSON.stringify(pinned)); }catch(e){} noteLayoutChanged(); }
+function hasLayoutPref(obj, key){
+  return Object.prototype.hasOwnProperty.call(obj||{}, key);
+}
 function curPins(){
-  if(!pinned[room]) pinned[room] = [...deskDefault(room)];
+  if(!hasLayoutPref(pinned, room) || !Array.isArray(pinned[room])) pinned[room] = [...deskDefault(room)];
   return pinned[room];
 }
 function setPins(arr){ pinned[room] = arr; savePins(); }
@@ -901,13 +905,12 @@ function presentStrips(){
 }
 // effective column order: exact custom order if set, else strips present in data
 function curStrips(){
-  const pref=stripPref[room];
-  if(pref && pref.length) return pref.slice();
+  if(hasLayoutPref(stripPref, room) && Array.isArray(stripPref[room])) return stripPref[room].slice();
   return presentStrips();
 }
 // snapshot current strips into an editable preference (first time user customizes)
 function ensureStripPref(){
-  if(!stripPref[room]) stripPref[room]=curStrips();
+  if(!hasLayoutPref(stripPref, room) || !Array.isArray(stripPref[room])) stripPref[room]=curStrips();
   return stripPref[room];
 }
 function loadEdits(){
@@ -1275,11 +1278,11 @@ function render(){
 
   const thead=document.querySelector('#grid thead');
   const tbody=document.querySelector('#grid tbody');
-  thead.innerHTML='<tr><th>PIPE / HUB</th>'+strips.map(s=>`<th class="draghdr" draggable="true" data-strip="${esc(s)}">${esc(s)}<button class="hdrx" data-delstrip="${esc(s)}" title="Remove column">×</button></th>`).join('')+'</tr>';
+  thead.innerHTML='<tr><th>PIPE / HUB</th>'+strips.map(s=>`<th class="draghdr" draggable="true" data-strip="${esc(s)}">${esc(s)}<button type="button" class="hdrx" data-delstrip="${esc(s)}" title="Remove column">×</button></th>`).join('')+'</tr>';
   tbody.innerHTML=visible.map(p=>{
     const n=Object.values(M.cell[p]??{}).flat().length;
     const cls=p.includes(' / ')?' class="spread"':'';
-    return `<tr${cls}><th class="draghdr" draggable="true" data-pipe="${esc(p)}">${esc(p)}<small>${n?n+' quotes':'no quotes — pinned'}</small><button class="hdrx" data-delpipe="${esc(p)}" title="Remove row">×</button></th>`+
+    return `<tr${cls}><th class="draghdr" draggable="true" data-pipe="${esc(p)}">${esc(p)}<small>${n?n+' quotes':'no quotes — pinned'}</small><button type="button" class="hdrx" data-delpipe="${esc(p)}" title="Remove row">×</button></th>`+
       strips.map(s=>{
         const direct=M.cell[p]?.[s]?.[0];
         const imp=M.implied[p]?.[s];
@@ -1315,6 +1318,7 @@ function wireGridDrag(){
     const type = th.dataset.pipe!=null ? 'pipe' : 'strip';
     const name = type==='pipe' ? th.dataset.pipe : th.dataset.strip;
     th.addEventListener('dragstart',e=>{
+      if(e.target.closest('button,input,textarea,select')){ e.preventDefault(); return; }
       gDragType=type; gDragName=name; th.classList.add('dragging');
       e.dataTransfer.effectAllowed='move';
       try{ e.dataTransfer.setData('text/plain',name); }catch(_){}
@@ -1577,7 +1581,7 @@ function renderSetup(){
       <span class="hnd">⠿</span><span class="nm">${esc(p)}</span>
       <span class="ord"><button data-act="up" data-list="pipe" data-i="${i}">▲</button>
       <button data-act="down" data-list="pipe" data-i="${i}">▼</button></span>
-      <button class="rm" data-act="rm" data-list="pipe" data-i="${i}" title="Remove">×</button></div>`;
+      <button type="button" class="rm" data-act="rm" data-list="pipe" data-i="${i}" title="Remove">×</button></div>`;
   const pipeList=pins.map(rowItem).join('') || '<div class="ritem" style="color:var(--faint);cursor:default">none — add some below</div>';
 
   // available pipes to add (current desk, or every hub when building Custom)
@@ -1594,7 +1598,7 @@ function renderSetup(){
       <span class="hnd">⠿</span><span class="nm">${esc(s)}</span>
       <span class="ord"><button data-act="up" data-list="strip" data-i="${i}">▲</button>
       <button data-act="down" data-list="strip" data-i="${i}">▼</button></span>
-      <button class="rm" data-act="rm" data-list="strip" data-i="${i}" title="Remove column">×</button></div>`;
+      <button type="button" class="rm" data-act="rm" data-list="strip" data-i="${i}" title="Remove column">×</button></div>`;
   const stripListHtml=strips.map(stripItem).join('') || '<div class="ritem" style="color:var(--faint);cursor:default">none</div>';
 
   document.getElementById('mbody').innerHTML=`
@@ -1648,7 +1652,10 @@ let dragList=null, dragIdx=null;
 function wireDrag(){
   document.querySelectorAll('#mbody .rlist').forEach(listEl=>{
     listEl.querySelectorAll('.ritem[draggable]').forEach(it=>{
-      it.addEventListener('dragstart',e=>{ dragList=it.dataset.list; dragIdx=+it.dataset.i; it.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; });
+      it.addEventListener('dragstart',e=>{
+        if(e.target.closest('button,input,textarea,select')){ e.preventDefault(); return; }
+        dragList=it.dataset.list; dragIdx=+it.dataset.i; it.classList.add('dragging'); e.dataTransfer.effectAllowed='move';
+      });
       it.addEventListener('dragend',()=>{ it.classList.remove('dragging'); document.querySelectorAll('.ritem.over').forEach(x=>x.classList.remove('over')); });
       it.addEventListener('dragover',e=>{ if(it.dataset.list!==dragList)return; e.preventDefault(); it.classList.add('over'); });
       it.addEventListener('dragleave',()=>it.classList.remove('over'));
@@ -1692,25 +1699,54 @@ function submitChatBox(){
   }
 }
 
+function removePipeRow(pipe){
+  closeEditor();
+  selKey=null;
+  clearLookup(false);
+  document.getElementById('panel')?.classList.remove('open');
+  const a=curPins();
+  const i=a.indexOf(pipe);
+  if(i>=0){ a.splice(i,1); setPins(a); }
+  render();
+}
+function removeStripColumn(strip){
+  closeEditor();
+  selKey=null;
+  clearLookup(false);
+  document.getElementById('panel')?.classList.remove('open');
+  const a=ensureStripPref();
+  const i=a.indexOf(strip);
+  if(i>=0){ a.splice(i,1); stripPref[room]=a; saveStripPref(); }
+  render();
+}
+
 /* ---------- events ---------- */
 document.addEventListener('dblclick',e=>{
   const td=e.target.closest('td[data-k]');
   if(td){ openEditor(decodeURIComponent(td.dataset.k), td); }
 });
 document.addEventListener('click',e=>{
+  const delP=e.target.closest('[data-delpipe]');
+  if(delP){ e.preventDefault(); e.stopPropagation(); removePipeRow(delP.dataset.delpipe); return; }
+  const delS=e.target.closest('[data-delstrip]');
+  if(delS){ e.preventDefault(); e.stopPropagation(); removeStripColumn(delS.dataset.delstrip); return; }
+  const setupControl=e.target.closest('#mbody [data-act]');
+  if(setupControl){
+    e.preventDefault(); e.stopPropagation();
+    const act=setupControl.dataset.act;
+    if(act==='add-pipe-input'){ const inp=document.getElementById('addPipeInput');
+      setupAction('add-pipe-input','pipe',null,inp.value); inp.value=''; }
+    else if(act==='add-strip-input'){ const inp=document.getElementById('addStripInput');
+      setupAction('add-strip-input','strip',null,inp.value); inp.value=''; }
+    else setupAction(act, setupControl.dataset.list, setupControl.dataset.i!=null?+setupControl.dataset.i:null, setupControl.dataset.v);
+    return;
+  }
   if(e.target.closest('#profilebtn')){ switchBroker(); return; }
   if(e.target.closest('#tradeToggle')){
     tradesOpen=!tradesOpen; saveTradesOpen(); renderTrades(); return;
   }
   const trade=e.target.closest('[data-tradekey]');
   if(trade){ focusQuoteKey(decodeURIComponent(trade.dataset.tradekey)); return; }
-  // inline header delete (×) on grid rows/columns
-  const delP=e.target.closest('[data-delpipe]');
-  if(delP){ const a=curPins(); const i=a.indexOf(delP.dataset.delpipe);
-    if(i>=0){ a.splice(i,1); setPins(a); } render(); return; }
-  const delS=e.target.closest('[data-delstrip]');
-  if(delS){ const a=ensureStripPref(); const i=a.indexOf(delS.dataset.delstrip);
-    if(i>=0){ a.splice(i,1); stripPref[room]=a; saveStripPref(); } render(); return; }
   const td=e.target.closest('td[data-k]');
   if(td){ if(td.dataset.empty) return;   // empty boxes: double-click to add
           openEditor(decodeURIComponent(td.dataset.k), td); return; }
@@ -1739,17 +1775,6 @@ document.addEventListener('click',e=>{
     case 'deskdef':
       setPins([...deskDefault(room)]); delete stripPref[room]; saveStripPref();
       renderSetup(); render(); break;
-  }
-  // setup list actions (reorder / remove / add-from-available)
-  const sa=e.target.closest('[data-act]');
-  if(sa && e.target.closest('#mbody')){
-    const act=sa.dataset.act;
-    if(act==='add-pipe-input'){ const inp=document.getElementById('addPipeInput');
-      setupAction('add-pipe-input','pipe',null,inp.value); inp.value=''; }
-    else if(act==='add-strip-input'){ const inp=document.getElementById('addStripInput');
-      setupAction('add-strip-input','strip',null,inp.value); inp.value=''; }
-    else setupAction(act, sa.dataset.list, sa.dataset.i!=null?+sa.dataset.i:null, sa.dataset.v);
-    return;
   }
   if(e.target.id==='overlay') document.getElementById('overlay').classList.remove('open');
   if(e.target.id==='chatOverlay') closeChatBox();
