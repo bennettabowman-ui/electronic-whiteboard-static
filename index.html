@@ -16,6 +16,31 @@
 html,body{height:100%}
 body{background:var(--ink);color:var(--text);font-family:var(--mono);font-size:13px;
      display:flex;flex-direction:column;overflow:hidden}
+body.locked > header,
+body.locked > .tape,
+body.locked > .main,
+body.locked > footer{filter:blur(2px);pointer-events:none;user-select:none}
+
+.lock-screen{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;
+  padding:24px;background:#07101d;color:var(--text)}
+.lock-screen.hidden{display:none}
+.lock-card{width:min(390px,100%);border:1px solid var(--line);border-radius:8px;
+  background:var(--panel);box-shadow:0 24px 70px rgba(0,0,0,.48);padding:28px}
+.lock-brand{display:flex;flex-direction:column;gap:4px;margin-bottom:22px;line-height:1.1}
+.lock-brand b{font-size:14px;letter-spacing:.16em;color:var(--fresh)}
+.lock-brand span{font-size:10px;letter-spacing:.2em;color:var(--dim)}
+.lock-card h1{font-size:16px;letter-spacing:.12em;color:var(--fresh);margin-bottom:18px}
+.lock-card label{display:block;font-size:10px;letter-spacing:.16em;color:var(--faint);margin-bottom:6px}
+.lock-row{display:flex;gap:8px}
+.lock-row input{flex:1;min-width:0;background:var(--ink);border:1px solid var(--line);
+  border-radius:4px;color:var(--text);font-family:var(--mono);font-size:14px;padding:9px 10px}
+.lock-row input:focus{outline:1px solid var(--accent);border-color:var(--accent)}
+.lock-row button{border:1px solid var(--trade);border-radius:4px;background:var(--trade);
+  color:var(--ink);font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.08em;
+  padding:0 14px;cursor:pointer}
+.lock-error{min-height:18px;margin-top:9px;color:var(--ask);font-size:11px;letter-spacing:.04em}
+@media(max-width:480px){.lock-card{padding:22px}.lock-row{flex-direction:column}
+  .lock-row button{height:38px}}
 
 header{display:flex;align-items:center;gap:14px;padding:10px 16px;
        border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
@@ -197,10 +222,17 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
 .overlay.open{display:flex}
 .modal{background:var(--panel);border:1px solid var(--line);border-radius:8px;
        width:min(680px,94vw);max-height:86vh;display:flex;flex-direction:column}
+.modal.chatmodal{width:min(760px,94vw)}
 .mh{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
 .mh h2{font-size:13px;letter-spacing:.12em;color:var(--fresh)}
 .mh .btn{margin-left:auto}
 .mbody{overflow:auto;padding:14px 18px}
+.chatbox{width:100%;min-height:260px;resize:vertical;background:var(--ink);border:1px solid var(--line);
+  border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;line-height:1.45;
+  padding:11px 12px}
+.chatbox:focus{outline:1px solid var(--accent);border-color:var(--accent)}
+.chatstatus{min-height:16px;margin-top:8px;color:var(--dim);font-size:11px}
+.chatstatus.err{color:var(--ask)}
 .grp{margin-bottom:16px}
 .grp h3{font-size:10px;letter-spacing:.18em;color:var(--faint);margin-bottom:8px;
   display:flex;align-items:center;gap:8px}
@@ -245,11 +277,24 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
   body.trades-closed .gridwrap{padding-bottom:0}}
 </style>
 </head>
-<body>
+<body class="locked">
+<div class="lock-screen" id="lockScreen" role="dialog" aria-modal="true" aria-labelledby="lockTitle">
+  <form class="lock-card" id="lockForm">
+    <div class="lock-brand"><b>ELECTRONIC WHITEBOARD</b><span>NG BASIS · ICE BLOCK FEED</span></div>
+    <h1 id="lockTitle">PASSWORD REQUIRED</h1>
+    <label for="lockPassword">PASSWORD</label>
+    <div class="lock-row">
+      <input type="password" id="lockPassword" autocomplete="current-password" autofocus>
+      <button type="submit">ENTER</button>
+    </div>
+    <p class="lock-error" id="lockError" role="alert"></p>
+  </form>
+</div>
 <header>
   <div class="brand"><b>ELECTRONIC WHITEBOARD</b><span>NG BASIS · ICE BLOCK FEED</span></div>
   <div class="tabs" id="tabs"></div>
   <div class="tabs prodsel" id="prodsel"></div>
+  <button class="btn primary" id="chatbtn">CHAT</button>
   <button class="btn" id="importbtn">⬆ IMPORT</button>
   <button class="btn" id="customize">⚙ PIPES</button>
   <button class="btn trade-toggle" id="tradeToggle" aria-expanded="true">TRADES <b id="tradeTabCount">0</b></button>
@@ -296,6 +341,23 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
       <button class="btn" id="deskdef">RESET TO DESK DEFAULT</button>
       <div class="right">
         <button class="btn primary" id="done">DONE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="chatOverlay">
+  <div class="modal chatmodal" role="dialog" aria-label="Chat quote upload">
+    <div class="mh"><h2>CHAT QUOTE UPLOAD</h2><button class="btn" id="chatClose">×</button></div>
+    <div class="mbody">
+      <textarea class="chatbox" id="chatPaste" spellcheck="false" placeholder="Paste broker chat here"></textarea>
+      <div class="chatstatus" id="chatStatus"></div>
+    </div>
+    <div class="mf">
+      <button class="btn" id="chatClear">CLEAR</button>
+      <div class="right">
+        <button class="btn" id="chatCancel">CANCEL</button>
+        <button class="btn primary" id="chatUpload">UPLOAD QUOTES</button>
       </div>
     </div>
   </div>
@@ -679,11 +741,12 @@ const PRODUCTS = ["basis","index","gd","phys"];
 const PROD_LABEL = {basis:"Basis", index:"Index", gd:"GD", phys:"Phys"};
 const PROFILE_NAME = "Default";
 const BROKER_STORAGE_KEY = "ewb-who";
-let broker = loadBroker();
-let product = loadProduct();
-let pinned = loadPins();   // room -> [pipe names]  (order = display order)
-let stripPref = loadStripPref(); // room -> [strip codes] (order = column order)
-let edits = loadEdits();   // room -> product -> KEY -> {bid,offer,traded,ts}
+let broker = "";
+let product = "basis";
+let pinned = {};   // room -> [pipe names]  (order = display order)
+let stripPref = {}; // room -> [strip codes] (order = column order)
+let edits = {};   // room -> product -> KEY -> {bid,offer,traded,ts}
+let appStarted = false;
 
 function cleanBrokerName(name){
   return (name||"").trim() || "desk";
@@ -1389,35 +1452,105 @@ function toast(msg, isErr){
   clearTimeout(toastTimer);
   toastTimer=setTimeout(()=>{t.className='toast';}, isErr?6000:4500);
 }
-async function importFiles(fileList){
-  const files=[...fileList]; if(!files.length) return;
-  let added=0, parsed=0, dupes=0; const roomsHit={};
+function activeChatRoom(){
+  return isCustomRoom(room) ? (ROOMS[0] || "MC/TEXAS") : room;
+}
+function chatStamp(){
+  const d=new Date();
+  const date=[d.getMonth()+1,d.getDate(),String(d.getFullYear()).slice(-2)]
+    .map(x=>String(x).padStart(2,'0')).join('/');
+  let h=d.getHours();
+  const ap=h>=12?'PM':'AM';
+  h=h%12 || 12;
+  const time=`${String(h).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')} ${ap}`;
+  return {date,time};
+}
+function wrapLooseChat(text){
+  const {date,time}=chatStamp();
+  const body = text.includes('{{')
+    ? text
+    : text.split(/\r?\n/).map(line=>line.trim()).filter(Boolean).map(line=>`{{${line}}}`).join('\n');
+  return `${date} ${time}:${activeChatRoom()}:${cleanBrokerName(broker)}:${body}`;
+}
+function parseChatText(text){
+  let qs=window.ICEEngine.process(text);
+  if(qs.length) return qs;
+  return window.ICEEngine.process(wrapLooseChat(text));
+}
+function noteImportedLayout(q){
+  let pins=pinned[q.room];
+  if(!pins) pins=[...deskDefault(q.room)];
+  let pinsChanged=false, stripsChanged=false;
+  if(!pins.includes(q.pipe)){
+    pins.push(q.pipe);
+    pinned[q.room]=pins;
+    pinsChanged=true;
+  }
+  if(stripPref[q.room] && !stripPref[q.room].includes(q.strip)){
+    stripPref[q.room].push(q.strip);
+    stripsChanged=true;
+  }
+  return {pinsChanged,stripsChanged};
+}
+function importChatText(text, opts={}){
+  const raw=(text||'').trim();
+  const source=opts.source||'chat';
+  if(!raw){ toast(source==='chat'?'Paste chat text first.':'No chat text found.', true); return {parsed:0,added:0,dupes:0}; }
+  let qs=[];
+  try{ qs=parseChatText(raw); }
+  catch(err){ toast('Couldn\u2019t read that chat text.', true); return {parsed:0,added:0,dupes:0,error:err}; }
+
+  let added=0, dupes=0, pinsChanged=false, stripsChanged=false;
+  const parsed=qs.length, roomsHit={}, productsHit={};
   const existing=new Set(QUOTES.map(QKEY));
-  try{
-    for(const f of files){
-      const text=await f.text();
-      const qs=window.ICEEngine.process(text);
-      parsed+=qs.length;
-      for(const q of qs){
-        const k=QKEY(q);
-        if(existing.has(k)){ dupes++; continue; }
-        existing.add(k); q.ts=ts(q); QUOTES.push(q);
-        roomsHit[q.room]=(roomsHit[q.room]||0)+1; added++;
-      }
-    }
-  }catch(err){ toast('Couldn\u2019t read that file — is it a raw ICE chat export?', true); return; }
-  if(parsed===0){ toast('No quotes found. Expecting raw ICE Block chat (lines with {{ }} markup).', true); return; }
+  if(parsed===0){
+    toast('No quotes found. Expecting ICE chat or broker quote shorthand.', true);
+    return {parsed,added,dupes};
+  }
+  for(const q of qs){
+    q.product=q.product||"basis";
+    const k=QKEY(q);
+    if(existing.has(k)){ dupes++; continue; }
+    existing.add(k);
+    q.ts=ts(q);
+    QUOTES.push(q);
+    roomsHit[q.room]=(roomsHit[q.room]||0)+1;
+    productsHit[q.product]=(productsHit[q.product]||0)+1;
+    const layout=noteImportedLayout(q);
+    pinsChanged = pinsChanged || layout.pinsChanged;
+    stripsChanged = stripsChanged || layout.stripsChanged;
+    added++;
+  }
+  if(pinsChanged) savePins();
+  if(stripsChanged) saveStripPref();
   ROOMS=[...new Set(QUOTES.map(q=>q.room))].filter(r=>r!==CUSTOM_ROOM);
   MAXTS=Math.max(...QUOTES.map(q=>q.ts));
-  // jump to the room that received the most new quotes, if current got none
-  if(!isCustomRoom(room) && !roomsHit[room]){
+  // jump to the room/product that received the most new quotes, if the current view did not
+  if(added && !isCustomRoom(room) && !roomsHit[room]){
     const top=Object.entries(roomsHit).sort((a,b)=>b[1]-a[1])[0];
     if(top) room=top[0];
   }
+  if(added && !productsHit[product]){
+    const top=Object.entries(productsHit).sort((a,b)=>b[1]-a[1])[0];
+    if(top && PRODUCTS.includes(top[0])){ product=top[0]; saveProduct(); }
+  }
   render();
-  const breakdown=Object.entries(roomsHit).map(([r,n])=>`${r} +${n}`).join(' · ');
-  toast(added? `Imported <b>${added}</b> new quote${added>1?'s':''}${dupes?` (${dupes} already on board)`:''}${breakdown?' — '+breakdown:''}`
+  const roomBreakdown=Object.entries(roomsHit).map(([r,n])=>`${r} +${n}`).join(' · ');
+  const productBreakdown=Object.entries(productsHit).map(([p,n])=>`${PROD_LABEL[p]||p} +${n}`).join(' · ');
+  const breakdown=[roomBreakdown, productBreakdown].filter(Boolean).join(' · ');
+  toast(added? `Uploaded <b>${added}</b> new quote${added>1?'s':''}${dupes?` (${dupes} already on board)`:''}${breakdown?' — '+breakdown:''}`
               : `Nothing new — those ${dupes} quotes are already on the board.`);
+  return {parsed,added,dupes,roomsHit,productsHit};
+}
+async function importFiles(fileList){
+  const files=[...fileList]; if(!files.length) return;
+  try{
+    const texts=[];
+    for(const f of files){
+      texts.push(await f.text());
+    }
+    return importChatText(texts.join('\n'), {source:'file'});
+  }catch(err){ toast('Couldn\u2019t read that file — is it a raw ICE chat export?', true); return; }
 }
 
 /* ---------- board setup (reorder + add pipes & strips) ---------- */
@@ -1531,6 +1664,34 @@ function wireDrag(){
 const _renderSetup=renderSetup;
 renderSetup=function(){ _renderSetup(); wireDrag(); };
 
+/* ---------- chat paste box ---------- */
+function setChatStatus(msg, isErr){
+  const el=document.getElementById('chatStatus');
+  if(!el) return;
+  el.textContent=msg||'';
+  el.className='chatstatus'+(isErr?' err':'');
+}
+function openChatBox(){
+  closeEditor();
+  setChatStatus('');
+  document.getElementById('chatOverlay').classList.add('open');
+  setTimeout(()=>document.getElementById('chatPaste')?.focus(),0);
+}
+function closeChatBox(){
+  document.getElementById('chatOverlay').classList.remove('open');
+  setChatStatus('');
+}
+function submitChatBox(){
+  const input=document.getElementById('chatPaste');
+  const result=importChatText(input?.value||'', {source:'chat'});
+  if(result?.parsed && !result.error){
+    input.value='';
+    closeChatBox();
+  } else {
+    setChatStatus(result?.error?'Could not read chat text.':'No quotes found.', true);
+  }
+}
+
 /* ---------- events ---------- */
 document.addEventListener('dblclick',e=>{
   const td=e.target.closest('td[data-k]');
@@ -1563,6 +1724,10 @@ document.addEventListener('click',e=>{
   switch(e.target.id){
     case 'pclose': selKey=null;
       document.getElementById('panel').classList.remove('open'); render(); break;
+    case 'chatbtn': openChatBox(); break;
+    case 'chatClose': case 'chatCancel': closeChatBox(); break;
+    case 'chatClear': document.getElementById('chatPaste').value=''; setChatStatus(''); break;
+    case 'chatUpload': submitChatBox(); break;
     case 'customize': openModal(); break;
     case 'importbtn': document.getElementById('fileinput').click(); break;
     case 'mclose': case 'done':
@@ -1587,6 +1752,7 @@ document.addEventListener('click',e=>{
     return;
   }
   if(e.target.id==='overlay') document.getElementById('overlay').classList.remove('open');
+  if(e.target.id==='chatOverlay') closeChatBox();
   // click outside an open editor closes it (cell clicks handled above already returned)
   const ed=document.getElementById('editor');
   if(ed.classList.contains('open') && !e.target.closest('#editor') && !e.target.closest('td[data-k]'))
@@ -1601,6 +1767,10 @@ document.getElementById('mbody').addEventListener('keydown',e=>{
   if(e.key!=='Enter') return;
   if(e.target.id==='addPipeInput'){ e.preventDefault(); setupAction('add-pipe-input','pipe',null,e.target.value); e.target.value=''; document.getElementById('addPipeInput')?.focus(); }
   else if(e.target.id==='addStripInput'){ e.preventDefault(); setupAction('add-strip-input','strip',null,e.target.value); e.target.value=''; document.getElementById('addStripInput')?.focus(); }
+});
+document.getElementById('chatPaste').addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ e.preventDefault(); closeChatBox(); }
+  else if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){ e.preventDefault(); submitChatBox(); }
 });
 document.getElementById('filter').addEventListener('input',e=>{
   filter=e.target.value.toLowerCase(); render();
@@ -1622,11 +1792,64 @@ document.getElementById('lookupStatus').addEventListener('click',()=>{
 document.getElementById('fileinput').addEventListener('change',e=>{
   importFiles(e.target.files); e.target.value='';
 });
-setInterval(()=>{document.getElementById('clock').textContent=
-  new Date().toLocaleTimeString('en-US',{hour12:false});},1000);
-renderProfile();
-if(!applyLayout(loadCachedLayout(), {persist:false})) render();
-ensureBrokerCache();
+function updateClock(){
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('en-US',{hour12:false});
+}
+function initAppState(){
+  broker = loadBroker();
+  product = loadProduct();
+  pinned = loadPins();
+  stripPref = loadStripPref();
+  edits = loadEdits();
+}
+function startWhiteboard(){
+  if(appStarted) return;
+  appStarted = true;
+  window.EWBStarted = true;
+  document.body.classList.remove('locked');
+  document.getElementById('lockScreen')?.classList.add('hidden');
+  initAppState();
+  updateClock();
+  setInterval(updateClock,1000);
+  renderProfile();
+  if(!applyLayout(loadCachedLayout(), {persist:false})) render();
+  ensureBrokerCache();
+  if(window.EWBSync?.start) window.EWBSync.start();
+}
+window.startWhiteboard = startWhiteboard;
+
+const LOCK_PASSWORD = "thanksbennett";
+const LOCK_STORAGE_KEY = "ewb-password-ok";
+function passwordUnlocked(){
+  try{ return sessionStorage.getItem(LOCK_STORAGE_KEY)==="1"; }catch(e){ return false; }
+}
+function rememberPasswordUnlock(){
+  try{ sessionStorage.setItem(LOCK_STORAGE_KEY,"1"); }catch(e){}
+}
+function setupPasswordScreen(){
+  const screen=document.getElementById('lockScreen');
+  const form=document.getElementById('lockForm');
+  const input=document.getElementById('lockPassword');
+  const error=document.getElementById('lockError');
+  if(!screen || !form || !input){ startWhiteboard(); return; }
+  if(passwordUnlocked()){ startWhiteboard(); return; }
+  document.body.classList.add('locked');
+  setTimeout(()=>input.focus(),0);
+  form.addEventListener('submit',e=>{
+    e.preventDefault();
+    if(input.value===LOCK_PASSWORD){
+      rememberPasswordUnlock();
+      error.textContent="";
+      startWhiteboard();
+      return;
+    }
+    input.value="";
+    error.textContent="Incorrect password.";
+    input.focus();
+  });
+}
+setupPasswordScreen();
 </script>
 
 <!-- ============================================================
@@ -1794,16 +2017,25 @@ ensureBrokerCache();
   const _setEdit = setEdit;
   setEdit = function(p,s,obj){ _setEdit(p,s,obj); pushEdit(p,s,obj); };
 
-  const _importFiles = importFiles;
-  importFiles = async function(fileList){
+  const _importChatText = importChatText;
+  importChatText = function(text, opts){
     const before = new Set(QUOTES.map(QKEY));
-    await _importFiles(fileList);
+    const result = _importChatText(text, opts);
     const fresh = QUOTES.filter(q=>!before.has(QKEY(q)));
     fresh.forEach(q=>haveQ.add(QKEY(q)));
     pushQuotes(fresh);
+    return result;
   };
 
-  initialLoad().then(subscribe);
+  let syncStarted=false;
+  window.EWBSync = {
+    start(){
+      if(syncStarted) return;
+      syncStarted=true;
+      initialLoad().then(subscribe);
+    }
+  };
+  if(window.EWBStarted) window.EWBSync.start();
 })();
 </script>
 </body>
