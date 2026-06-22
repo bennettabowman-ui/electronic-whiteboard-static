@@ -339,6 +339,7 @@ footer{padding:5px 16px;border-top:1px solid var(--line);background:var(--panel)
     <div class="mh"><h2 id="mtitle">BOARD SETUP</h2><button class="btn" id="mclose">×</button></div>
     <div class="mbody" id="mbody"></div>
     <div class="mf">
+      <button class="btn" id="recentOnlyBtn">HIDE OLD QUOTES</button>
       <button class="btn" id="deskdef">RESET TO DESK DEFAULT</button>
       <div class="right">
         <button class="btn primary" id="done">DONE</button>
@@ -733,11 +734,15 @@ function quoteInRoom(q, r=room){
   return pipeRelatedToPins(q.pipe, pinned?.[CUSTOM_ROOM]||[]);
 }
 function setupQuoteUniverse(r=room){
-  return isCustomRoom(r) ? QUOTES : QUOTES.filter(q=>q.room===r);
+  const qs = isCustomRoom(r) ? QUOTES : QUOTES.filter(q=>q.room===r);
+  if(!recentOnly) return qs;
+  const latestDate = latestBoardDate(r, product);
+  return qs.filter(q=>(q.product||"basis")===product && (!latestDate || q2date(q.ts)===latestDate));
 }
 
 let room = ROOMS[0], selKey = null, filter = "", lookupKey = null, lookupTimer = null, lookupResult = null;
 let tradesOpen = loadTradesOpen();
+let recentOnly = loadRecentOnly();
 const PRODUCTS = ["basis","index","gd","phys"];
 const PROD_LABEL = {basis:"Basis", index:"Index", gd:"GD", phys:"Phys"};
 const PROFILE_NAME = "Default";
@@ -779,6 +784,12 @@ function loadTradesOpen(){
 }
 function saveTradesOpen(){
   try{ localStorage.setItem('ewb-trades-open', tradesOpen?'1':'0'); }catch(e){}
+}
+function loadRecentOnly(){
+  try{ return localStorage.getItem('ewb-recent-only') === '1'; }catch(e){ return false; }
+}
+function saveRecentOnly(){
+  try{ localStorage.setItem('ewb-recent-only', recentOnly?'1':'0'); }catch(e){}
 }
 function profileCacheKey(name=broker){
   return `ewb-layout-profile:${brokerKey(name)}:${PROFILE_NAME}`;
@@ -899,7 +910,7 @@ function saveStripPref(){ try{ localStorage.setItem('ewb-strips', JSON.stringify
 // strips actually present in the data for the current room+product (+ manual edits)
 function presentStrips(){
   const set=new Set();
-  for(const q of QUOTES) if(quoteInRoom(q) && (q.product||"basis")===product) set.add(q.strip);
+  for(const q of boardQuotes()) set.add(q.strip);
   const ed=edits[room]?.[product]||{}; for(const k in ed) set.add(k.split('\u0001')[1]);
   return STRIP_ORDER.filter(s=>set.has(s)).concat([...set].filter(s=>!STRIP_ORDER.includes(s)));
 }
@@ -956,6 +967,24 @@ function ageLabel(t){
   const d=Math.floor((MAXTS-t)/DAY);const dt=new Date(t);
   return d<1?(dt.getMonth()+1)+'/'+dt.getDate():d+'d';}
 function q2date(t){const dt=new Date(t);return (dt.getMonth()+1)+'/'+dt.getDate();}
+function quoteMatchesBoard(q, r=room, p=product){
+  return quoteInRoom(q, r) && (q.product||"basis")===p;
+}
+function latestBoardDate(r=room, p=product){
+  let latest=-Infinity;
+  for(const q of QUOTES) if(quoteMatchesBoard(q,r,p) && q.ts>latest) latest=q.ts;
+  return Number.isFinite(latest) ? q2date(latest) : null;
+}
+function boardQuotes(r=room, p=product, opts={}){
+  const useRecent = opts.recentOnly ?? recentOnly;
+  const latestDate = useRecent ? latestBoardDate(r,p) : null;
+  return QUOTES.filter(q=>quoteMatchesBoard(q,r,p) && (!latestDate || q2date(q.ts)===latestDate));
+}
+function quoteIsVisible(q, r=room, p=product){
+  if(!quoteMatchesBoard(q,r,p)) return false;
+  const latestDate = recentOnly ? latestBoardDate(r,p) : null;
+  return !latestDate || q2date(q.ts)===latestDate;
+}
 
 /* ---------- quick quote lookup ---------- */
 const normLookup = s => (s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
@@ -1137,7 +1166,7 @@ function focusQuoteKey(key){
 function tradedItems(){
   const out=[];
   for(const q of QUOTES){
-    if(!q.traded || !quoteInRoom(q) || (q.product||"basis")!==product) continue;
+    if(!q.traded || !quoteIsVisible(q)) continue;
     out.push({key:KEY(q.pipe,q.strip), pipe:q.pipe, strip:q.strip, q, ts:q.ts, manual:false});
   }
   const ed=edits[room]?.[product]||{};
@@ -1179,7 +1208,7 @@ function renderTrades(){
 
 /* ---------- model ---------- */
 function buildModel(){
-  const qs = QUOTES.filter(q=>quoteInRoom(q) && (q.product||"basis")===product);
+  const qs = boardQuotes();
   const cell = {};
   for(const q of qs){ (cell[q.pipe]??={}); (cell[q.pipe][q.strip]??=[]).push(q); }
   // overlay manual edits as the freshest direct quote in each cell
@@ -1268,11 +1297,13 @@ function render(){
   M = buildModel();
   const pins = curPins();
   // rows follow the pinned order exactly (incl. pinned-but-no-data pipes)
-  const visiblePins = pins.slice();
+  let visiblePins = pins.slice();
+  if(recentOnly) visiblePins = visiblePins.filter(p=>M.cell[p] || M.implied[p]);
   const lookupPipe = lookupKey?.split('\u0001')[0];
   if(lookupPipe && !visiblePins.includes(lookupPipe)) visiblePins.push(lookupPipe);
   const visible = visiblePins.filter(p=>p.toLowerCase().includes(filter) || p===lookupPipe);
-  const strips = curStrips();
+  let strips = curStrips();
+  if(recentOnly) strips = strips.filter(s=>visible.some(p=>M.cell[p]?.[s] || M.implied[p]?.[s]));
   const lookupStrip = lookupKey?.split('\u0001')[1];
   if(lookupStrip && !strips.includes(lookupStrip)) strips.push(lookupStrip);
 
@@ -1307,8 +1338,15 @@ function render(){
       }).join('')+'</tr>';
   }).join('');
   document.getElementById('nQuotes').textContent=M.count;
-  const lo=Math.min(...QUOTES.map(q=>q.ts));
-  document.getElementById('range').textContent=q2date(lo)+' – '+q2date(MAXTS);
+  const rangeQuotes=boardQuotes();
+  if(rangeQuotes.length){
+    const lo=Math.min(...rangeQuotes.map(q=>q.ts));
+    const hi=Math.max(...rangeQuotes.map(q=>q.ts));
+    document.getElementById('range').textContent=recentOnly ? `latest ${q2date(hi)}` : q2date(lo)+' – '+q2date(hi);
+  } else {
+    document.getElementById('range').textContent=recentOnly ? 'latest only' : '';
+  }
+  renderRecentToggle();
   renderTabs(); renderTape(); renderTrades(); wireGridDrag();
 }
 
@@ -1360,7 +1398,7 @@ function renderTabs(){
     `<button class="tab${p===product?' active':''}" data-prod="${p}" title="${cnt[p]||0} quotes">${PROD_LABEL[p]}</button>`).join('');
 }
 function renderTape(){
-  const latest=QUOTES.filter(q=>quoteInRoom(q) && (q.product||"basis")===product).sort((a,b)=>b.ts-a.ts).slice(0,30);
+  const latest=boardQuotes().sort((a,b)=>b.ts-a.ts).slice(0,30);
   document.getElementById('tape').innerHTML=latest.map(q=>{
     const b=fmt(q.bid),a=fmt(q.offer);
     const px=b&&a?`${b}/${a}`:b?`${b} bid`:`@ ${a}`;
@@ -1424,7 +1462,7 @@ function resetEditor(){
 function openPanel(key){
   selKey=key;
   const [p,s]=key.split('\u0001');
-  const arr=QUOTES.filter(q=>quoteInRoom(q)&&q.pipe===p&&q.strip===s&&(q.product||"basis")===product).sort((a,b)=>b.ts-a.ts);
+  const arr=QUOTES.filter(q=>quoteIsVisible(q)&&q.pipe===p&&q.strip===s).sort((a,b)=>b.ts-a.ts);
   document.getElementById('ptitle').innerHTML=`${esc(p)} <span class="strip">${esc(s)}</span> · ${PROD_LABEL[product]} · ${arr.length} quoted`;
   let notes='';
   const imp=M.implied[p]?.[s], direct=arr[0];
@@ -1563,6 +1601,27 @@ const REGION_ORDER = ["Appalachia","Northeast","New England","Mid-Con","Mid-Con/
   "Florida","Midwest/Can","Other"];
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 
+function renderRecentToggle(){
+  const btn=document.getElementById('recentOnlyBtn');
+  if(!btn) return;
+  const latest=latestBoardDate();
+  btn.textContent=recentOnly ? 'SHOW ALL QUOTES' : 'HIDE OLD QUOTES';
+  btn.classList.toggle('primary', recentOnly);
+  btn.title=recentOnly
+    ? `Showing only ${latest||'the latest session'} quotes`
+    : 'Hide stale quotes and show only the latest session';
+}
+function toggleRecentOnly(){
+  recentOnly=!recentOnly;
+  saveRecentOnly();
+  selKey=null;
+  clearLookup(true);
+  closeEditor();
+  document.getElementById('panel')?.classList.remove('open');
+  renderSetup();
+  render();
+}
+
 function openModal(){
   document.getElementById('mtitle').textContent=`BOARD SETUP — ${room}`;
   document.getElementById('overlay').classList.add('open');
@@ -1622,6 +1681,7 @@ function renderSetup(){
         </div>
       </div>
     </div>`;
+  renderRecentToggle();
 }
 
 function arrMove(a,from,to){ if(to<0||to>=a.length)return; const [x]=a.splice(from,1); a.splice(to,0,x); }
@@ -1768,6 +1828,7 @@ document.addEventListener('click',e=>{
     case 'importbtn': document.getElementById('fileinput').click(); break;
     case 'mclose': case 'done':
       document.getElementById('overlay').classList.remove('open'); break;
+    case 'recentOnlyBtn': toggleRecentOnly(); break;
     case 'ed-save': saveEditor(); break;
     case 'ed-cancel': closeEditor(); break;
     case 'ed-reset': resetEditor(); break;
